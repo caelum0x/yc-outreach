@@ -69,7 +69,7 @@ footer{color:var(--muted);font-size:13px;margin-top:32px}
     <label class="f">GitHub<input data-k="github" placeholder="https://github.com/..."></label>
     <label class="f">Resume link<input data-k="resume" placeholder="https://..."></label>
   </div>
-  <label class="f" style="margin-top:10px">Your skills / stack <span style="color:var(--muted)">(used to rank companies by fit — "Best fit first")</span>
+  <label class="f" style="margin-top:10px">Your skills / stack <span style="color:var(--muted)">(used to rank companies by fit — "Best fit first". A starred score, e.g. "12%*", means the company has no open roles listed yet, so it's estimated from its one-liner/industry instead of an actual job post.)</span>
     <textarea data-k="skills" style="min-height:60px" placeholder="e.g. TypeScript, React, Node, Postgres, Go, infra, founding engineer"></textarea></label>
   <h2 style="margin-top:16px">2. Email template</h2>
   <label class="f">Subject<input data-k="subject"></label>
@@ -306,17 +306,24 @@ function jobsRow(c) {
   return `<div class="r"><b>Jobs</b>${c.job_count} open on YC</div>${rows}${jobPicker(c)}`;
 }
 
-// Fit score: overlap between the user's skills/stack and a company's open-role titles (always available)
-// plus any full job descriptions fetched via "view job" (item 2/13), as a % of skill keywords matched.
+// Fit score: overlap between the user's skills/stack and (a) a company's open-role titles, plus any
+// full job descriptions fetched via "view job" (item 2/13) — the strong signal, full weight — and
+// (b) the company's one-liner/industry — a weaker fallback signal, so companies with zero open roles
+// (the majority of any batch in practice) still rank instead of all tying at "no score" and sitting in
+// whatever order they loaded. Returns {score, roleBased} so the UI can label a description-only match
+// differently from a real open-role match, or null when there's nothing to score against at all.
 function tokenize(s) { return new Set(String(s || "").toLowerCase().match(/[a-z0-9+.#]+/g) || []); }
+const ABOUT_WEIGHT = 0.4; // one-liner/industry match counts for less than an actual open-role match
 function fitScore(c) {
   const skills = tokenize(tpl.skills);
-  if (!skills.size || !c.jobs?.length) return null;
-  const extra = c.jobs.map(j => jobCache[j.url]?.description || "").join(" ");
-  const text = tokenize((c.jobs || []).map(j => j.title).join(" ") + " " + extra);
-  if (!text.size) return 0;
-  let hit = 0; skills.forEach(s => { if (text.has(s)) hit++ });
-  return Math.round(100 * hit / skills.size);
+  if (!skills.size) return null;
+  const extra = (c.jobs || []).map(j => jobCache[j.url]?.description || "").join(" ");
+  const jobText = tokenize((c.jobs || []).map(j => j.title).join(" ") + " " + extra);
+  const aboutText = tokenize((c.one_liner || "") + " " + (c.industry || ""));
+  if (!jobText.size && !aboutText.size) return null;
+  let hit = 0;
+  skills.forEach(s => { if (jobText.has(s)) hit += 1; else if (aboutText.has(s)) hit += ABOUT_WEIGHT; });
+  return { score: Math.round(100 * hit / skills.size), roleBased: jobText.size > 0 };
 }
 
 function guessAlts(e, o) {
@@ -336,7 +343,7 @@ function render() {
     const key = (c.name + " " + fs.map(o => o.name).join(" ") + " " + (c.one_liner || "") + " " + (c.jobs || []).map(j => j.title).join(" ")).toLowerCase();
     return `<details data-i="${i}" data-k="${esc(key)}" data-s="${b.kind}" data-ind="${esc(industryTop(c.industry))}" data-jobs="${c.job_count == null ? "" : c.job_count}" data-stage="${stage}" data-due="${due ? "1" : ""}" class="${stage !== "not_sent" ? "sent" : ""} stage-${stage}">
       <summary><span class="name">${esc(c.name)}</span><span class="badge ${b.kind || "none"}">${esc(b.label)}${b.confidence ? ` ${b.confidence}%` : ""}</span>
-      <span class="meta">${esc(f?.name || "")}<br>${esc(c.batch)}${rolesLine(c)}${fit != null ? `<br><span class="fit">${fit}% fit</span>` : ""}${due ? `<br><span class="due">follow-up due</span>` : ""}</span></summary>
+      <span class="meta">${esc(f?.name || "")}<br>${esc(c.batch)}${rolesLine(c)}${fit != null ? `<br><span class="fit" title="${fit.roleBased ? "matches skills against this company's open-role titles/descriptions" : "no open roles yet — estimated from the company's one-liner/industry instead"}">${fit.score}% fit${fit.roleBased ? "" : "*"}</span>` : ""}${due ? `<br><span class="due">follow-up due</span>` : ""}</span></summary>
       <div class="body">
         <p class="one">${esc(c.one_liner)}${c.industry ? ` · <span class="lnk">${esc(c.industry)}</span>` : ""}${url(c.website) ? ` · <a class="lnk" href="${url(c.website)}" target="_blank" rel="noopener">website</a>` : ""} · <a class="lnk" href="https://www.ycombinator.com/companies/${esc(c.slug)}" target="_blank" rel="noopener">YC</a>${url(f?.linkedin) ? ` · <a class="lnk" href="${url(f.linkedin)}" target="_blank" rel="noopener">LinkedIn</a>` : ""}${url(f?.twitter) ? ` · <a class="lnk" href="${url(f.twitter)}" target="_blank" rel="noopener">X</a>` : ""}</p>
         ${c.error ? `<p class="status err">${esc(c.error)}</p>` : ""}
@@ -746,7 +753,7 @@ $("all").onclick = e => {
 };
 $("fitSort").onclick = () => {
   sortMode = sortMode === "fit" ? "default" : "fit";
-  DATA.sort(sortMode === "fit" ? (a, b) => (fitScore(b) ?? -1) - (fitScore(a) ?? -1) : (a, b) => (b.launched_at || 0) - (a.launched_at || 0));
+  DATA.sort(sortMode === "fit" ? (a, b) => (fitScore(b)?.score ?? -1) - (fitScore(a)?.score ?? -1) : (a, b) => (b.launched_at || 0) - (a.launched_at || 0));
   $("fitSort").textContent = sortMode === "fit" ? "Default order" : "Best fit first";
   render();
 };
