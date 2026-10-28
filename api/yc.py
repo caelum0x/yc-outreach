@@ -315,12 +315,26 @@ def digest(known_batches_json, slug_list, known_jobs_json):
     current = batches()
     new_batches = [b for b in current if known_batches.get(b["batch"]) != b["count"]]
     changed_jobs = []
+    job_counts = {}
     if slug_list:
         with cf.ThreadPoolExecutor(len(slug_list)) as ex:
             for r in ex.map(company_jobs_quick, slug_list):
-                if not r.get("error") and r["job_count"] != known_jobs.get(r["slug"], 0):
+                if r.get("error"):
+                    continue
+                job_counts[r["slug"]] = r["job_count"]
+                if r["job_count"] != known_jobs.get(r["slug"], 0):
                     changed_jobs.append(r)
-    return {"checked_at": int(time.time()), "new_batches": new_batches, "changed_jobs": changed_jobs}
+    # "batches" (every current batch, not just changed ones) and "job_counts" (every checked slug's
+    # current count) let the client persist a complete baseline. Without them the client's
+    # noteBaselineBatches() call throws on `d.batches.filter` (d.batches was undefined), which the
+    # caller swallows silently -- the new-batch/new-role watcher never fires or errors visibly.
+    return {
+        "checked_at": int(time.time()),
+        "batches": current,
+        "new_batches": new_batches,
+        "changed_jobs": changed_jobs,
+        "job_counts": job_counts,
+    }
 
 
 def route(query):
