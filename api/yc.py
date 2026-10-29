@@ -322,7 +322,11 @@ def digest(known_batches_json, slug_list, known_jobs_json):
                 if r.get("error"):
                     continue
                 job_counts[r["slug"]] = r["job_count"]
-                if r["job_count"] != known_jobs.get(r["slug"], 0):
+                # Only flag a real change when we have an actual prior count for this slug. Defaulting
+                # a missing baseline to 0 (the old behavior) meant every company's first-ever digest
+                # check flagged its existing roles as "changed" -- confirmed live: a cold known_jobs={}
+                # call returned 13/30 companies in changed_jobs, none of which had just posted anything.
+                if r["slug"] in known_jobs and r["job_count"] != known_jobs[r["slug"]]:
                     changed_jobs.append(r)
     # "batches" (every current batch, not just changed ones) and "job_counts" (every checked slug's
     # current count) let the client persist a complete baseline. Without them the client's
